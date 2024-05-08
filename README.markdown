@@ -82,7 +82,8 @@ Synopsis
         return
     end
 
-    ok = md5:update("lo")
+        -- md5:update() with an optional "len" parameter
+    ok = md5:update("loxxx", 2)
     if not ok then
         ngx.say("failed to add data")
         return
@@ -169,6 +170,21 @@ Synopsis
     ngx.say("AES 128 CBC (WITH IV) Encrypted HEX: ", str.to_hex(encrypted))
     ngx.say("AES 128 CBC (WITH IV) Decrypted: ",
         aes_128_cbc_with_iv:decrypt(encrypted))
+
+    local aes = require "resty.aes"
+    local str = require "resty.string"
+    local enable_padding = false
+    local aes_256_cbc_with_padding = aes:new(
+        key, nil, aes.cipher(256,"cbc"), {iv = string.sub(key, 1, 16)}, nil,
+        nil, enable_padding)
+        -- AES-256 CBC (custom keygen, user padding with block_size=32)
+    local text = "hello"
+    local block_size = 32
+    local pad = block_size - #text % 32
+    local text_paded = text .. string.rep(string.char(pad), pad)
+    local encrypted = aes_256_cbc_with_padding:encrypt(text_paded)
+    ngx.say("AES-256 CBC (custom keygen, user padding with block_size=32) HEX: ",
+        str.to_hex(encrypted))
 ```
 
 [Back to TOC](#table-of-contents)

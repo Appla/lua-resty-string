@@ -269,7 +269,7 @@ failed to new: bad key length
                 ngx.decode_base64("Xr4ilOzQ4PCOq3aQ0qbuaQ=="),
                 nil,
                 aes.cipher(128,"cbc"),
-                {iv = "hello"}
+                {iv = "helloworld&helloworld"}
             )
 
             if not aes_default then
@@ -289,7 +289,301 @@ failed to new: bad key length
 --- request
 GET /t
 --- response_body
-failed to new: bad iv
+failed to new: bad iv length
 --- no_error_log
 [error]
 
+
+
+=== TEST 11: AES-256 GCM sha256 no salt
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua_block {
+            local aes = require "resty.aes"
+            local str = require "resty.string"
+            local aes_default = aes:new("secret",nil,
+              aes.cipher(256,"gcm"), aes.hash.sha256, 1, 12)
+            local encrypted = aes_default:encrypt("hello")
+            ngx.say("AES-256 GCM: ", str.to_hex(encrypted[1]),
+                    " tag: ",  str.to_hex(encrypted[2]))
+            local decrypted, err = aes_default:decrypt(encrypted[1], encrypted[2])
+            ngx.say(decrypted == "hello")
+        }
+    }
+--- request
+GET /t
+--- response_body
+AES-256 GCM: 4acef84443 tag: bcecc29fb0d8b5c895e21f6ea89681a2
+true
+--- no_error_log
+[error]
+
+
+
+=== TEST 12: AES-256 GCM with iv
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua_block {
+            local function from_hex(s)
+                return (s:gsub('..', function (cc)
+                    return string.char(tonumber(cc, 16))
+                end))
+            end
+            local aes = require "resty.aes"
+            local str = require "resty.string"
+            local aes_default = aes:new(
+                from_hex("40A4510F290AD8182AF4B0260C655F8511E5B46BCA20EA191D8BC7B4D99CE95F"),
+                nil,
+                aes.cipher(256,"gcm"),
+                {iv = from_hex("f31a8c01e125e4720481be05")})
+            local encrypted = aes_default:encrypt("13770713710")
+            ngx.say("AES-256 GCM: ", str.to_hex(encrypted[1]),
+                    " tag: ",  str.to_hex(encrypted[2]))
+            local decrypted, err = aes_default:decrypt(encrypted[1], encrypted[2])
+            ngx.say(decrypted == "13770713710")
+        }
+    }
+--- request
+GET /t
+--- response_body
+AES-256 GCM: 755eccf6aa0cd51d55ad0c tag: 9a61f5a3cc3089bbe7de00a3dd484a1d
+true
+--- no_error_log
+[error]
+
+
+
+=== TEST 13: AES-256 GCM sha256 no salt
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua_block {
+            local aes = require "resty.aes"
+            local str = require "resty.string"
+            local aes_default = aes:new("secret",nil,
+              aes.cipher(256,"gcm"), aes.hash.sha256, 1, 12)
+            local encrypted = aes_default.encrypt("hello")
+        }
+    }
+--- request
+GET /t
+--- error_code: 500
+--- response_body eval
+qr/500 Internal Server Error/
+--- error_log eval
+qr/\[error\] .*? lua entry thread aborted: runtime error: content_by_lua\(nginx.conf:\d+\):6: bad argument #1 self: table expected, got string/ms
+
+
+
+=== TEST 14: AES-256 GCM sha256 no salt
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua_block {
+            local aes = require "resty.aes"
+            local str = require "resty.string"
+            local aes_default = aes:new("secret",nil,
+              aes.cipher(256,"gcm"), aes.hash.sha256, 1, 12)
+            local encrypted = aes_default.encrypt("hello")
+            local decrypted, err = aes_default.decrypt(encrypted[1], encrypted[2])
+        }
+    }
+--- request
+GET /t
+--- error_code: 500
+--- response_body eval
+qr/500 Internal Server Error/
+--- error_log eval
+qr/\[error\] .*? lua entry thread aborted: runtime error: content_by_lua\(nginx.conf:\d+\):6: bad argument #1 self: table expected, got string/ms
+
+
+
+=== TEST 15: AES-256 CBC, user padding string + disable padding for aes object
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua_block {
+            local aes = require "resty.aes"
+            local str = require "resty.string"
+            local key = ngx.decode_base64("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG=")
+
+            local text = "hello"
+            local block_size = 32
+            local pad = block_size - #text % block_size
+            ngx.say("pad: ", pad)
+            local text_padded = text .. string.rep(string.char(pad), pad)
+
+            local aes_256_cbc_without_padding, err = aes:new(
+                key, nil, aes.cipher(256,"cbc"), {iv = string.sub(key, 1, 16)},
+                nil, nil, false
+            )
+            if not aes_256_cbc_without_padding then
+                ngx.log(ngx.WARN, err)
+                return
+            end
+
+            local encrypted_without_aes_padding, err = aes_256_cbc_without_padding:encrypt(text_padded)
+            if not encrypted_without_aes_padding then
+                ngx.log(ngx.ERR, err)
+            end
+            ngx.say("AES-256 CBC (custom keygen, user padding with block_size=32, disable padding) HEX: ",
+                str.to_hex(encrypted_without_aes_padding),
+                ", len: ", string.len(encrypted_without_aes_padding))
+
+            local decrypted = aes_256_cbc_without_padding:decrypt(encrypted_without_aes_padding)
+            local pad = string.byte(string.sub(decrypted, #decrypted))
+            ngx.say("pad: ", pad)
+
+            local decrypted_text = string.sub(decrypted, 1, #decrypted - pad)
+            ngx.say(decrypted_text == "hello")
+        }
+    }
+--- request
+GET /t
+--- response_body
+pad: 27
+AES-256 CBC (custom keygen, user padding with block_size=32, disable padding) HEX: eebf8ca13072beede75c595a11b7fb0beffb7ccfb03f72d08456b555610172d1, len: 32
+pad: 27
+true
+--- no_error_log
+[error]
+
+
+
+=== TEST 16: AES-256 CBC, user padding string + enable padding (default) for aes object, encrypted string will be longer due to auto padding
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua_block {
+            local aes = require "resty.aes"
+            local str = require "resty.string"
+            local key = ngx.decode_base64("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG=")
+
+            local text = "hello"
+            local block_size = 32
+            local pad = block_size - #text % block_size
+            ngx.say("pad: ", pad)
+            local text_padded = text .. string.rep(string.char(pad), pad)
+
+            local aes_256_cbc_with_padding, err = aes:new(
+                key, nil, aes.cipher(256,"cbc"), {iv = string.sub(key, 1, 16)},
+                nil, nil, true
+            )
+            if not aes_256_cbc_with_padding then
+                ngx.log(ngx.ERR, err)
+                return
+            end
+
+            local encrypted_with_aes_padding, err = aes_256_cbc_with_padding:encrypt(text_padded)
+            if not encrypted_with_aes_padding then
+                ngx.log(ngx.ERR, err)
+            end
+
+            -- padding will always be added, so `len = text_padded + padding_block_size`
+            ngx.say("AES-256 CBC (custom keygen, user padding with block_size=32, enable padding) HEX: ",
+                str.to_hex(encrypted_with_aes_padding),
+                ", len: ", string.len(encrypted_with_aes_padding))
+
+            local decrypted = aes_256_cbc_with_padding:decrypt(encrypted_with_aes_padding)
+            local pad = string.byte(string.sub(decrypted, #decrypted))
+            ngx.say("pad: ", pad)
+
+            local decrypted_text = string.sub(decrypted, 1, #decrypted - pad)
+            ngx.say(decrypted_text == "hello")
+        }
+    }
+--- request
+GET /t
+--- response_body
+pad: 27
+AES-256 CBC (custom keygen, user padding with block_size=32, enable padding) HEX: eebf8ca13072beede75c595a11b7fb0beffb7ccfb03f72d08456b555610172d15c54a6a02e960ce527a28c8551adfdff, len: 48
+pad: 27
+true
+--- no_error_log
+[error]
+
+
+
+=== TEST 17: AES-256 CBC, string without user padding + disable padding for aes object
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua_block {
+            local aes = require "resty.aes"
+            local str = require "resty.string"
+            local key = ngx.decode_base64("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG=")
+
+            local text = "hello"
+            local aes_256_cbc_without_padding, err = aes:new(
+                key, nil, aes.cipher(256,"cbc"), {iv = string.sub(key, 1, 16)},
+                nil, nil, false
+            )
+            if not aes_256_cbc_without_padding then
+                ngx.log(ngx.WARN, err)
+                return
+            end
+
+            local encrypted_unpadded_text, err = aes_256_cbc_without_padding:encrypt(text)
+            if not encrypted_unpadded_text then
+                ngx.say("ERROR: unpadded text: ", err)
+            end
+
+            local aes_256_cbc_with_padding, err = aes:new(
+                key, nil, aes.cipher(256,"cbc"), {iv = string.sub(key, 1, 16)},
+                nil, nil, true
+            )
+            if not aes_256_cbc_with_padding then
+                ngx.log(ngx.ERR, err)
+                return
+            end
+
+            local encrypted_text, err = aes_256_cbc_with_padding:encrypt(text)
+            if not encrypted_text then
+                ngx.log(ngx.ERR, err)
+                return
+            end
+
+            ngx.say("AES-256 CBC (custom keygen, without user padding, enable padding) HEX: ",
+                str.to_hex(encrypted_text),
+                ", len: ", string.len(encrypted_text))
+
+            local decrypted = aes_256_cbc_with_padding:decrypt(encrypted_text)
+            ngx.say(decrypted == "hello")
+        }
+    }
+--- request
+GET /t
+--- response_body
+ERROR: unpadded text: EVP_EncryptFinal_ex failed
+AES-256 CBC (custom keygen, without user padding, enable padding) HEX: 794617717c15d28cc729b983cb9d2257, len: 16
+true
+--- no_error_log
+[error]
+
+
+
+=== TEST 18: AES-256 GCM sha256 no salt with AAD
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua_block {
+            local aes = require "resty.aes"
+            local str = require "resty.string"
+            local aes_default = aes:new("secret",nil,
+              aes.cipher(256,"gcm"), aes.hash.sha256, 1, 12)
+            local encrypted = aes_default:encrypt("hello", "aad")
+            ngx.say("AES-256 GCM: ", str.to_hex(encrypted[1]),
+                    " tag: ",  str.to_hex(encrypted[2]))
+            local decrypted, err = aes_default:decrypt(encrypted[1], encrypted[2], "aad")
+            ngx.say(decrypted == "hello")
+        }
+    }
+--- request
+GET /t
+--- response_body
+AES-256 GCM: 4acef84443 tag: 46f4f3ca65395568407e15768b7526d9
+true
+--- no_error_log
+[error]
